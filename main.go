@@ -59,6 +59,10 @@ type Patron struct {
 	LastName      string `json:"last_name"`
 	DOB           string `json:"dob"` // Expected format: DDMMYYYY
 	LicenseNumber string `json:"license_number"`
+  State         string `json:"state"`
+  Expiration    string `json:"expiration"`
+  Gender        string `json:"gender"`
+  Zipcode       string `json:"zipcode"`
 }
 
 // Fixed CheckIDHandler using Gin's context
@@ -79,8 +83,8 @@ func CheckIDHandler(c *gin.Context) {
 
 	query := `
     WITH ins AS (
-      INSERT INTO patrons (first_name, middle_name, last_name, date_of_birth, license_number)
-      VALUES($1, $2, $3, $4, $5)
+      INSERT INTO patrons (first_name, middle_name, last_name, date_of_birth, license_number, state, expiration, gender, zipcode)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (license_number) DO NOTHING
       RETURNING id
     )
@@ -91,7 +95,7 @@ func CheckIDHandler(c *gin.Context) {
   `
 
 	var id int
-	err = db.QueryRow(query, p.FirstName, p.MiddleName, p.LastName, dob, p.LicenseNumber).Scan(&id)
+	err = db.QueryRow(query, p.FirstName, p.MiddleName, p.LastName, dob, p.LicenseNumber, p.State, p.Expiration, p.Gender, p.Zipcode).Scan(&id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -99,7 +103,7 @@ func CheckIDHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":      id,
-		"message": "Patron Created",
+		"message": "Patron Accepted",
 	})
 }
 
