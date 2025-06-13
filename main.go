@@ -29,18 +29,22 @@ func main() {
 
 	router.POST("/login", loginHandler)
 
-	router.GET("/protected", AuthMiddleWare(), func(c *gin.Context) {
-		userID := c.MustGet("user_id")
-		email := c.MustGet("email")
-		role := c.MustGet("role")
+	// router.GET("/protected", AuthMiddleWare(), func(c *gin.Context) {
+	// 	userID := c.MustGet("user_id")
+	// 	email := c.MustGet("email")
+	// 	role := c.MustGet("role")
 
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Protected Data",
-			"user_id": userID,
-			"email":   email,
-			"role":    role,
-		})
-	})
+	// 	c.JSON(http.StatusOK, gin.H{
+	// 		"message": "Protected Data",
+	// 		"user_id": userID,
+	// 		"email":   email,
+	// 		"role":    role,
+	// 	})
+	// })
+
+	router.GET("/todays_patrons", GetTodaysPatronsHandler)
+
+	router.POST("patrons/:id/create_incident", GetCreateIncidentHandler)
 
 	router.POST("/check_id", CheckIDHandler)
 
@@ -59,13 +63,94 @@ type Patron struct {
 	LastName      string `json:"last_name"`
 	DOB           string `json:"dob"` // Expected format: DDMMYYYY
 	LicenseNumber string `json:"license_number"`
-  State         string `json:"state"`
-  Expiration    string `json:"expiration"`
-  Gender        string `json:"gender"`
-  Zipcode       string `json:"zipcode"`
+	State         string `json:"state"`
+	Expiration    string `json:"expiration"`
+	Gender        string `json:"gender"`
+	Zipcode       string `json:"zipcode"`
+	LastScanned   string `json:"last_scanned"`
 }
 
-// Fixed CheckIDHandler using Gin's context
+type Incident struct {
+	ReporterID   uint       `json:"user_id"`
+	PatronID     uint       `json:"patron_id"`
+	Description  string     `json:"description"`
+	Type         string     `json:"type"`
+	Status       string     `json:"status"`
+	DateOccurred time.Time  `json:"date_occurred"`
+	ApprovedBy   *uint      `json:"approved_by"` // nullable
+	ApprovedAt   *time.Time `json:"approved_at"` // nullable
+	CreatedAt    time.Time  `json:"created_at"`
+}
+
+func GetCreateIncidentHandler(c *gin.Context) {
+	var i Incident
+
+	if err := c.BindJSON(&i); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON: " + err.Error()})
+		return
+	}
+
+	query := `
+		INSERT INTO incidents(
+			reporter_id, patron_id, description,
+			type, status, date_occurred, approved_by,
+			approved_at, created_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id;
+	`
+
+	var id int
+	var err = db.QueryRow(query, i.ReporterID, i.PatronID, i.Description, i.Type, i.Status, i.DateOccurred, i.ApprovedBy, i.ApprovedAt, i.CreatedAt).Scan(&id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":      id,
+		"message": "Incident Recorded Successfully",
+	})
+
+}
+
+func GetTodaysPatronsHandler(c *gin.Context) {
+	today := time.Now().Format("2006-01-02") // Go's date layout for YYYY-MM-DD
+	query := `
+    SELECT id, first_name, last_name, date_of_birth as dob 
+    FROM patrons 
+    WHERE DATE(last_scanned) = $1;
+  `
+
+	rows, err := db.Query(query, today)
+	if err != nil {
+		log.Printf("DB query error: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var patrons []map[string]interface{}
+	for rows.Next() {
+		var id, firstName, lastName string
+		var dob time.Time
+
+		if err := rows.Scan(&id, &firstName, &lastName, &dob); err != nil {
+			log.Printf("Row scan error: %v\n", err)
+			continue
+		}
+
+		patrons = append(patrons, map[string]interface{}{
+			"id":         id,
+			"first_name": firstName,
+			"last_name":  lastName,
+			"dob":        dob.Format("01/02/2006"), // or "2006-01-02"
+		})
+	}
+
+	c.JSON(http.StatusOK, patrons)
+}
+
 func CheckIDHandler(c *gin.Context) {
 	var p Patron
 	if err := c.BindJSON(&p); err != nil {
@@ -77,25 +162,30 @@ func CheckIDHandler(c *gin.Context) {
 
 	dob, err := time.Parse("01022006", p.DOB)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid date format, expected DDMMYYYY"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid date format, expected MMDDYYYY - for 'dob'"})
+		return
+	}
+
+	last_scanned, err := time.Parse("01022006", p.LastScanned)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid date format expected MMDDYYYY - for 'last_scanned'"})
 		return
 	}
 
 	query := `
-    WITH ins AS (
-      INSERT INTO patrons (first_name, middle_name, last_name, date_of_birth, license_number, state, expiration, gender, zipcode)
-      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      ON CONFLICT (license_number) DO NOTHING
-      RETURNING id
-    )
-    SELECT id FROM ins
-    UNION
-    SELECT id FROM patrons WHERE license_number = $5
-    LIMIT 1;
-  `
+	INSERT INTO patrons (
+		first_name, middle_name, last_name,
+		date_of_birth, license_number, state,
+		expiration, gender, zipcode, last_scanned
+	)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	ON CONFLICT (license_number)
+	DO UPDATE SET last_scanned = EXCLUDED.last_scanned
+	RETURNING id;
+	`
 
 	var id int
-	err = db.QueryRow(query, p.FirstName, p.MiddleName, p.LastName, dob, p.LicenseNumber, p.State, p.Expiration, p.Gender, p.Zipcode).Scan(&id)
+	err = db.QueryRow(query, p.FirstName, p.MiddleName, p.LastName, dob, p.LicenseNumber, p.State, p.Expiration, p.Gender, p.Zipcode, last_scanned).Scan(&id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -218,4 +308,3 @@ func AuthMiddleWare() gin.HandlerFunc {
 		c.Next()
 	}
 }
-
