@@ -44,7 +44,9 @@ func main() {
 
 	router.GET("/todays_patrons", GetTodaysPatronsHandler)
 
-	router.POST("patrons/:id/create_incident", GetCreateIncidentHandler)
+	router.GET("/incidents/pending", GetPendingIncidentsHandler)
+
+	router.POST("/patrons/:patron_id/create_incident", GetCreateIncidentHandler)
 
 	router.POST("/check_id", CheckIDHandler)
 
@@ -71,15 +73,61 @@ type Patron struct {
 }
 
 type Incident struct {
+	ID           int        `json:"id"`
 	ReporterID   uint       `json:"user_id"`
 	PatronID     uint       `json:"patron_id"`
 	Description  string     `json:"description"`
-	Type         string     `json:"type"`
 	Status       string     `json:"status"`
 	DateOccurred time.Time  `json:"date_occurred"`
 	ApprovedBy   *uint      `json:"approved_by"` // nullable
 	ApprovedAt   *time.Time `json:"approved_at"` // nullable
 	CreatedAt    time.Time  `json:"created_at"`
+	Type         string     `json:"type"`
+}
+
+func GetPendingIncidentsHandler(c *gin.Context) {
+
+	query := `
+		SELECT 
+			id, reporter_id, patron_id, description,
+			status, date_occurred, approved_by, approved_at,
+			created_at, type
+		FROM incidents
+		WHERE approved_by IS NULL
+		ORDER BY created_at DESC;
+	`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var incidents []Incident
+
+	for rows.Next() {
+		var inc Incident
+		err := rows.Scan(
+			&inc.ID,
+			&inc.ReporterID,
+			&inc.PatronID,
+			&inc.Description,
+			&inc.Status,
+			&inc.DateOccurred,
+			&inc.ApprovedBy,
+			&inc.ApprovedAt,
+			&inc.CreatedAt,
+			&inc.Type,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse row: " + err.Error()})
+			return
+		}
+		incidents = append(incidents, inc)
+	}
+
+	c.JSON(http.StatusOK, incidents)
 }
 
 func GetCreateIncidentHandler(c *gin.Context) {
@@ -101,7 +149,7 @@ func GetCreateIncidentHandler(c *gin.Context) {
 	`
 
 	var id int
-	var err = db.QueryRow(query, i.ReporterID, i.PatronID, i.Description, i.Type, i.Status, i.DateOccurred, i.ApprovedBy, i.ApprovedAt, i.CreatedAt).Scan(&id)
+	var err = db.QueryRow(query, i.ReporterID, i.PatronID, i.Description, i.Type, i.Status, i.DateOccurred, nil, nil, i.CreatedAt).Scan(&id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -111,7 +159,6 @@ func GetCreateIncidentHandler(c *gin.Context) {
 		"id":      id,
 		"message": "Incident Recorded Successfully",
 	})
-
 }
 
 func GetTodaysPatronsHandler(c *gin.Context) {
