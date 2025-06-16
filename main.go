@@ -46,6 +46,10 @@ func main() {
 
 	router.GET("/incidents/pending", GetPendingIncidentsHandler)
 
+	router.PUT("/incidents/:incident_id/approve", PutApprovedIncidentHandler)
+
+	router.DELETE("/incidents/:incident_id", DeleteIncidentHandler)
+
 	router.POST("/patrons/:patron_id/create_incident", GetCreateIncidentHandler)
 
 	router.POST("/check_id", CheckIDHandler)
@@ -83,6 +87,56 @@ type Incident struct {
 	ApprovedAt   *time.Time `json:"approved_at"` // nullable
 	CreatedAt    time.Time  `json:"created_at"`
 	Type         string     `json:"type"`
+}
+
+type IncidentAuth struct {
+	ID         int  `json:"id"`
+	ApprovedBy *int `json:"approved_by"` // optional but required for approval
+}
+
+func DeleteIncidentHandler(c *gin.Context) {
+	var i IncidentAuth
+
+	if err := c.BindJSON(&i); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON: " + err.Error()})
+		return
+	}
+
+	query := `
+		DELETE FROM incidents
+		WHERE id = $1;
+	`
+
+	_, err := db.Exec(query, i.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete incident"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "incident deleted successfully"})
+}
+
+func PutApprovedIncidentHandler(c *gin.Context) {
+	var i IncidentAuth
+
+	if err := c.BindJSON(&i); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON: " + err.Error()})
+		return
+	}
+
+	query := `
+		UPDATE incidents
+		SET status  = 'Approved',
+			approved_by = $2,
+			approved_at = NOW()
+		WHERE id = $1;
+	`
+
+	_, err := db.Exec(query, i.ID, i.ApprovedBy)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to approve incident"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "incident approved successfully"})
 }
 
 func GetPendingIncidentsHandler(c *gin.Context) {
